@@ -30,11 +30,9 @@ jobs:
           make
           ls -lh
 
-      - name: Enviar artefatos (PKG e ELF)
+      - name: Enviar artefato (PKG)
         uses: actions/upload-artifact@v4
         with:
           name: cobra-ps3
-          path: |
-            cobra.pkg
-            cobra.elf
+          path: cobra.pkg
           if-no-files-found: error
