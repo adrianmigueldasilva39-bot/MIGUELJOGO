@@ -8,7 +8,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     container:
-      image: ps3dev/ps3dev:latest
+      image: hldtux/ps3dev:latest
 
     steps:
       - name: Baixar codigo do repositorio
@@ -16,6 +16,9 @@ jobs:
 
       - name: Compilar ELF, SELF e PKG
         run: |
+          export PS3DEV=/usr/local/ps3dev
+          export PSL1GHT=$PS3DEV
+          export PATH=$PATH:$PS3DEV/bin:$PS3DEV/ppu/bin:$PS3DEV/spu/bin
           make clean
           make
           make pkg
