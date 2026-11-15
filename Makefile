@@ -1,38 +1,40 @@
-ifeq ($(strip $(PSL1GHT)),)
-$(error "Defina a variavel PSL1GHT")
-endif
+# Makefile - Cobra Neon PS3 (PSL1GHT)
+# Sem tiny3d, so RSX + GCM padrao
+
+TARGET		:=	cobra
+BUILD		:=	build
+SOURCES		:=	.
+DATA		:=	data
+INCLUDES	:=	include
+LIBDIR		:=
+
+# Se o PS3DEV nao estiver setado, usa o padrao do teu CI
+PS3DEV		?=	/opt/ps3dev
+PSL1GHT		?=	/opt/ps3dev
+
+TITLE		:=	Cobra Neon
+APPID		:=	COBRANEON01
+CONTENTID	:=	UP0001-COBRANEON01_00-0000000000000000
+
+# Flags
+CFLAGS		:=	-O2 -Wall -mcpu=cell -mhard-float -fmodulo-sched \
+			-ffunction-sections -fdata-sections
+CXXFLAGS	:=	$(CFLAGS) -fno-exceptions -fno-rtti
+ASFLAGS		:=	$(CFLAGS)
+LDFLAGS		:=	-Wl,--gc-sections
+
+# Libs - ORDEM IMPORTA, nao mexe
+LIBS		:=	-lrsx -lgcm_sys -lsysutil -lio -lm
+
+# Includes padrao do PSL1GHT
+INCLUDE		:=	-I$(PSL1GHT)/ppu/include -I$(PS3DEV)/portlibs/ppu/include \
+			-I$(CURDIR)/$(INCLUDES)
+
+LIBDIRS		:=	-L$(PSL1GHT)/ppu/lib -L$(PS3DEV)/portlibs/ppu/lib
+
+# Regras do PSL1GHT (tem que vir DEPOIS das variaveis)
 include $(PSL1GHT)/ppu_rules
 
-.DEFAULT_GOAL := all
-
-TARGET    := cobra
-TITLE     := Cobra Arena
-APPID     := COBR00001
-CONTENTID := UP0001-$(APPID)_00-0000000000000000
-SFOXML    := sfo.xml
-PORTLIBS  := $(PS3DEV)/portlibs/ppu
-
-MACHDEP := -mhard-float -fmodulo-sched -ffunction-sections -fdata-sections
-CFLAGS  := -O2 -Wall -mcpu=cell $(MACHDEP) -I$(PSL1GHT)/ppu/include -I$(PORTLIBS)/include
-LDFLAGS := $(MACHDEP) -L$(PSL1GHT)/ppu/lib -L$(PORTLIBS)/lib
-LIBS    := -lrsx -lgcm_sys -lio -lsysutil -lrt -llv2 -lm
-
-all: $(TARGET).pkg
-
-main.o: main.c
-	$(CC) $(CFLAGS) -c $< -o $@
-
-$(TARGET).elf: main.o
-	$(CC) $(LDFLAGS) -o $@ $< $(LIBS)
-
-$(TARGET).pkg: $(TARGET).elf ICON0.PNG $(SFOXML)
-	rm -rf pkg
-	mkdir -p pkg/USRDIR
-	cp ICON0.PNG pkg/ICON0.PNG
-	$(PS3DEV)/bin/sprxlinker $(TARGET).elf
-	$(PS3DEV)/bin/make_self_npdrm $(TARGET).elf pkg/USRDIR/EBOOT.BIN $(CONTENTID)
-	$(PS3DEV)/bin/sfo.py --title "$(TITLE)" --appid "$(APPID)" -f $(SFOXML) pkg/PARAM.SFO
-	$(PS3DEV)/bin/pkg.py --contentid $(CONTENTID) pkg/ $@
-
-clean:
-	rm -rf pkg *.o *.elf *.self *.pkg
+# Limpa PKG tambem
+clean::
+	@rm -rf $(TARGET).pkg $(TARGET).elf $(BUILD) 2>/dev/null || true
