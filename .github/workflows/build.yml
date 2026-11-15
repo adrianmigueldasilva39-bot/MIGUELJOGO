@@ -14,6 +14,9 @@ jobs:
       - name: Baixar codigo do repositorio
         uses: actions/checkout@v4
 
+      - name: Procurar sfo.py na imagem
+        run: find / -name "sfo.py" 2>/dev/null || true
+
       - name: Compilar PKG
         run: |
           export PS3DEV=/usr/local/ps3dev
