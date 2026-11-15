@@ -2,245 +2,168 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
-#include <sys/time.h>
+#include <unistd.h>
+#include <malloc.h>
+#include <ppu-types.h>
+#include <sysutil/sysutil.h>
+#include <sysutil/video.h>
+#include <rsx/rsx.h>
 #include <io/pad.h>
-#include <tiny3d.h>
-#define WORLD_R 1500.0f
-#define MAX_SNAKES 7
-#define MAX_FOOD 140
-#define MAX_SEG 60
-#define W 1280
-#define H 720
-typedef struct{float x;float y;}Vec2;
-typedef struct{float x;float y;int color;}Food;
-typedef struct{
-Vec2 segs[MAX_SEG];
-int len;
-float angle;
-float tang;
-float score;
-int alive;
-int isPlayer;
-int colorIdx;
-float rad;
-float aiTimer;
-char name[16];
-}Snake;
-static Snake snakes[MAX_SNAKES];
-static Food foods[MAX_FOOD];
-static int foodCount=0;
-static float camX=0;
-static float camY=0;
-static int gameOver=0;
-static u32 colors[5][2]={
-{0xFF00E676,0xFF00C853},
-{0xFFFF4081,0xFFF50057},
-{0xFF2979FF,0xFF2962FF},
-{0xFFFFEA00,0xFFFFD600},
-{0xFFAA00FF,0xFF7B1FA2}
+#define CB_SIZE (0x100000)
+#define HOST_SIZE (32 * 1024 * 1024)
+#define WORLD 3200.0f
+#define MAXSEG 420
+#define NSN 10
+#define NPEL 500
+#define SP 7.0f
+#define PI 3.14159265f
+typedef struct { float x[MAXSEG], y[MAXSEG]; int len, alive, respawn, boost, grow, score, tick; float ang, tgt; u32 col; } Snake;
+typedef struct { float x, y; int size, active; u32 col; } Pellet;
+static const u32 palette[8] = {0x00FF4D4D,0x0055D6FF,0x0066FF66,0x00FFD23F,0x00C77DFF,0x00FF8FAB,0x0000E5C0,0x00FF9F43};
+static gcmContextData *ctx;
+static u32 W,H;
+static u32 *fb[2];
+static u32 fboff[2];
+static u32 *back;
+static int cur=0, first_flip=1;
+static volatile int running=1;
+static void sysutil_cb(u64 status,u64 param,void *usrdata){(void)param;(void)usrdata;if(status==SYSUTIL_EXIT_GAME)running=0;}
+static void init_screen(void){
+void *host=memalign(1024*1024,HOST_SIZE);
+rsxInit(&ctx,CB_SIZE,HOST_SIZE,host);
+videoState st; videoGetState(VIDEO_PRIMARY,0,&st);
+u32 resid=st.displayMode.resolution;
+if(videoGetResolutionAvailability(VIDEO_PRIMARY,VIDEO_RESOLUTION_720,VIDEO_ASPECT_AUTO,0)) resid=VIDEO_RESOLUTION_720;
+videoResolution res; videoGetResolution(resid,&res);
+W=res.width; H=res.height;
+videoConfiguration vc; memset(&vc,0,sizeof(vc));
+vc.resolution=resid; vc.format=VIDEO_BUFFER_FORMAT_XRGB; vc.aspect=VIDEO_ASPECT_AUTO; vc.pitch=W*4;
+videoConfigure(VIDEO_PRIMARY,&vc,NULL,0);
+videoGetState(VIDEO_PRIMARY,0,&st);
+gcmSetFlipMode(GCM_FLIP_VSYNC);
+for(int i=0;i<2;i++){fb[i]=(u32*)rsxMemalign(64,W*H*4);gcmAddressToOffset(fb[i],&fboff[i]);gcmSetDisplayBuffer(i,fboff[i],W*4,W,H);}
+back=(u32*)memalign(64,W*H*4);
+memset(back,0,W*H*4);
+gcmResetFlipStatus();
+}
+static void wait_flip(void){while(gcmGetFlipStatus()!=0) usleep(200); gcmResetFlipStatus();}
+static void present(void){
+if(!first_flip) wait_flip(); else gcmResetFlipStatus();
+memcpy(fb[cur],back,W*H*4);
+gcmSetFlip(ctx,cur);
+rsxFlushBuffer(ctx);
+gcmSetWaitFlip(ctx);
+cur^=1; first_flip=0;
+}
+static void fill_rect(int x,int y,int w,int h,u32 c){
+int x0=x<0?0:x,y0=y<0?0:y;
+int x1=x+w,y1=y+h;
+if(x1>(int)W)x1=W; if(y1>(int)H)y1=H;
+for(int yy=y0;yy<y1;yy++){u32 *p=back+yy*W; for(int xx=x0;xx<x1;xx++) p[xx]=c;}
+}
+static void circle(int cx,int cy,int r,u32 c){
+if(r<1)r=1;
+if(cx+r<0||cx-r>=(int)W||cy+r<0||cy-r>=(int)H) return;
+for(int dy=-r;dy<=r;dy++){int y=cy+dy; if(y<0||y>=(int)H) continue; int hw=(int)sqrtf((float)(r*r-dy*dy)); int x0=cx-hw,x1=cx+hw; if(x0<0)x0=0; if(x1>=(int)W)x1=W-1; u32 *p=back+y*W; for(int x=x0;x<=x1;x++) p[x]=c;}
+}
+typedef struct{char c;const char *p;}Glyph;
+static const Glyph glyphs[]={
+{'0',"###" "#.#" "#.#" "#.#" "###"},{'1',".#." "##." ".#." ".#." "###"},
+{'2',"###" "..#" "###" "#.." "###"},{'3',"###" "..#" "###" "..#" "###"},
+{'4',"#.#" "#.#" "###" "..#" "..#"},{'5',"###" "#.." "###" "..#" "###"},
+{'6',"###" "#.." "###" "#.#" "###"},{'7',"###" "..#" "..#" "..#" "..#"},
+{'8',"###" "#.#" "###" "#.#" "###"},{'9',"###" "#.#" "###" "..#" "###"},
+{'A',".#." "#.#" "###" "#.#" "#.#"},{'B',"##." "#.#" "##." "#.#" "##."},
+{'C',"###" "#.." "#.." "#.." "###"},{'E',"###" "#.." "###" "#.." "###"},
+{'G',"###" "#.." "#.#" "#.#" "###"},{'M',"#.#" "###" "###" "#.#" "#.#"},
+{'O',"###" "#.#" "#.#" "#.#" "###"},{'P',"###" "#.#" "###" "#.." "#.."},
+{'R',"##." "#.#" "##." "#.#" "#.#"},{'S',"###" "#.." "###" "..#" "###"},
+{'T',"###" ".#." ".#." ".#." ".#."},{'U',"#.#" "#.#" "#.#" "#.#" "###"},
+{'V',"#.#" "#.#" "#.#" "#.#" ".#."},{'X',"#.#" "#.#" ".#." "#.#" "#.#"},
 };
-static u32 foodColors[5]={0xFFFF5252,0xFFFFEA00,0xFF00E676,0xFF2979FF,0xFFFF4081};
-static float frand(float a,float b){return a+(float)rand()/(float)RAND_MAX*(b-a);}
-void spawnFood(int n){
-for(int i=0;i<n&&foodCount<MAX_FOOD;i++){
-float a=frand(0,6.283f);
-float r=sqrtf(frand(0,1))*(WORLD_R-80);
-foods[foodCount].x=cosf(a)*r;
-foods[foodCount].y=sinf(a)*r;
-foods[foodCount].color=rand()%5;
-foodCount++;
+static const char *find_glyph(char c){for(unsigned i=0;i<sizeof(glyphs)/sizeof(glyphs[0]);i++) if(glyphs[i].c==c) return glyphs[i].p; return NULL;}
+static int text_width(const char *s,int sc){return (int)strlen(s)*4*sc-sc;}
+static void draw_text(const char *s,int x,int y,int sc,u32 c){for(;*s;s++){const char *g=find_glyph(*s); if(g) for(int r=0;r<5;r++) for(int k=0;k<3;k++) if(g[r*3+k]=='#') fill_rect(x+k*sc,y+r*sc,sc,sc,c); x+=4*sc;}}
+static Snake sn[NSN];
+static Pellet pel[NPEL];
+static int pelrot=0,dead_t=0,x_prev=0;
+static float camx=WORLD/2,camy=WORLD/2;
+static float pad_ax=0,pad_ay=0,pad_mag=0;
+static int pad_boost=0,pad_x=0;
+static float frand(void){return (float)rand()/(float)RAND_MAX;}
+static float radius_of(const Snake *s){int l=s->len>240?240:s->len; return 9.0f+l*0.035f;}
+static void add_pellet(float x,float y,int size){for(int k=0;k<NPEL;k++){int i=(pelrot+k)%NPEL; if(!pel[i].active){pel[i].x=x;pel[i].y=y;pel[i].size=size;pel[i].active=1;pel[i].col=palette[rand()%8];pelrot=(i+1)%NPEL;return;}}}
+static void spawn_snake(int i){Snake *s=&sn[i]; float x=400+frand()*(WORLD-800),y=400+frand()*(WORLD-800); s->ang=frand()*2*PI; s->tgt=s->ang; s->len=10; for(int j=0;j<s->len;j++){s->x[j]=x-cosf(s->ang)*SP*j; s->y[j]=y-sinf(s->ang)*SP*j;} s->alive=1;s->respawn=0;s->boost=0;s->grow=0;s->tick=0; s->col=palette[i%8];}
+static void kill_snake(int i){Snake *s=&sn[i]; for(int j=0;j<s->len;j+=2) add_pellet(s->x[j]+(frand()-0.5f)*10,s->y[j]+(frand()-0.5f)*10,2); s->alive=0; s->respawn=240; if(i==0) dead_t=0;}
+static void bot_think(int i){
+Snake *s=&sn[i]; float hx=s->x[0],hy=s->y[0];
+s->tgt+=(frand()-0.5f)*0.25f;
+if(s->tick%12==0){float best=380.0f*380.0f; int bi=-1; for(int k=0;k<NPEL;k++){if(!pel[k].active)continue; float dx=pel[k].x-hx,dy=pel[k].y-hy,d=dx*dx+dy*dy; if(d<best){best=d;bi=k;}} if(bi>=0) s->tgt=atan2f(pel[bi].y-hy,pel[bi].x-hx);}
+if(hx<250||hx>WORLD-250||hy<250||hy>WORLD-250) s->tgt=atan2f(WORLD/2-hy,WORLD/2-hx);
+float px=hx+cosf(s->ang)*55,py=hy+sinf(s->ang)*55; float rs=radius_of(s);
+for(int o=0;o<NSN;o++){if(o==i||!sn[o].alive)continue; float lim=rs+radius_of(&sn[o])+25; lim*=lim; for(int j=0;j<sn[o].len;j+=4){float dx=sn[o].x[j]-px,dy=sn[o].y[j]-py; if(dx*dx+dy*dy<lim){s->tgt=s->ang+1.6f; return;}}}
 }
+static void update_snake(int i){
+Snake *s=&sn[i];
+if(!s->alive){if(i>0&&--s->respawn<=0) spawn_snake(i); return;}
+s->tick++;
+if(i==0){if(pad_mag>0.3f) s->tgt=atan2f(pad_ay,pad_ax); s->boost=pad_boost;}
+else{bot_think(i); s->boost=(s->len>30&&(s->tick/90)%5==0)?1:0;}
+float d=s->tgt-s->ang; while(d>PI)d-=2*PI; while(d<-PI)d+=2*PI; if(d>0.075f)d=0.075f; if(d<-0.075f)d=-0.075f; s->ang+=d;
+float sp=3.0f;
+if(s->boost&&s->len>12){sp=5.4f; if(s->tick%10==0){s->len--; add_pellet(s->x[s->len],s->y[s->len],1);}}
+s->x[0]+=cosf(s->ang)*sp; s->y[0]+=sinf(s->ang)*sp;
+for(int j=1;j<s->len;j++){float dx=s->x[j-1]-s->x[j],dy=s->y[j-1]-s->y[j]; float dd=sqrtf(dx*dx+dy*dy); if(dd>SP){float f=(dd-SP)/dd; s->x[j]+=dx*f; s->y[j]+=dy*f;}}
+if(s->x[0]<0||s->x[0]>WORLD||s->y[0]<0||s->y[0]>WORLD){kill_snake(i);return;}
+float rs=radius_of(s),er=rs+12;
+for(int k=0;k<NPEL;k++){if(!pel[k].active)continue; float dx=pel[k].x-s->x[0],dy=pel[k].y-s->y[0]; if(dx*dx+dy*dy<er*er){pel[k].active=0; s->grow+=pel[k].size; s->score+=pel[k].size*5;}}
+while(s->grow>=2&&s->len<MAXSEG){s->x[s->len]=s->x[s->len-1]; s->y[s->len]=s->y[s->len-1]; s->len++; s->grow-=2;}
+if(s->len>=MAXSEG)s->grow=0;
+for(int o=0;o<NSN;o++){if(o==i||!sn[o].alive)continue; float lim=(rs+radius_of(&sn[o]))*0.75f; lim*=lim; for(int j=0;j<sn[o].len;j+=2){float dx=sn[o].x[j]-s->x[0],dy=sn[o].y[j]-s->y[0]; if(dx*dx+dy*dy<lim){kill_snake(i);return;}}}
 }
-void initSnake(int idx,int isPlayer,int ci,float x,float y,const char*name){
-Snake*s=&snakes[idx];
-memset(s,0,sizeof(Snake));
-s->angle=frand(0,6.28f);
-s->tang=s->angle;
-s->len=9;
-s->rad=10;
-s->alive=1;
-s->isPlayer=isPlayer;
-s->colorIdx=ci;
-strncpy(s->name,name,15);
-for(int i=0;i<s->len;i++){
-s->segs[i].x=x-cosf(s->angle)*i*10;
-s->segs[i].y=y-sinf(s->angle)*i*10;
+static void init_game(void){memset(pel,0,sizeof(pel)); for(int k=0;k<NPEL;k++) add_pellet(frand()*WORLD,frand()*WORLD,1+(rand()%5==0)); for(int i=0;i<NSN;i++){sn[i].score=0; spawn_snake(i);} dead_t=0;}
+static void read_pad(void){
+padInfo info; padData d;
+pad_ax=pad_ay=pad_mag=0; pad_boost=pad_x=0;
+ioPadGetInfo(&info);
+if(info.status[0]){ioPadGetData(0,&d); float ax=((int)d.ANA_L_H-128)/128.0f,ay=((int)d.ANA_L_V-128)/128.0f; if(d.BTN_LEFT)ax=-1; if(d.BTN_RIGHT)ax=1; if(d.BTN_UP)ay=-1; if(d.BTN_DOWN)ay=1; pad_ax=ax;pad_ay=ay; pad_mag=sqrtf(ax*ax+ay*ay); pad_boost=d.BTN_CROSS||d.BTN_R1||d.BTN_R2; pad_x=d.BTN_CROSS;}
 }
-if(!isPlayer){
-s->len=12;
-s->score=60;
-for(int i=9;i<s->len;i++){s->segs[i]=s->segs[9];}
+static void update_game(void){
+for(int i=0;i<NSN;i++) update_snake(i);
+int count=0; for(int k=0;k<NPEL;k++) count+=pel[k].active;
+for(int n=0;n<2&&count<NPEL-40;n++,count++) add_pellet(frand()*WORLD,frand()*WORLD,1+(rand()%5==0));
+if(sn[0].alive){camx=sn[0].x[0]; camy=sn[0].y[0];} else {dead_t++; if(dead_t>60&&pad_x&&!x_prev){spawn_snake(0); sn[0].score=0;}}
+x_prev=pad_x;
 }
+static void render(void){
+float sc=(float)W/1280.0f; float hw=W/2.0f,hh=H/2.0f;
+fill_rect(0,0,W,H,0x000E1420);
+int sx0=(int)((0-camx)*sc+hw),sx1=(int)((WORLD-camx)*sc+hw);
+int sy0=(int)((0-camy)*sc+hh),sy1=(int)((WORLD-camy)*sc+hh);
+u32 red=0x00380E12;
+if(sx0>0) fill_rect(0,0,sx0,H,red);
+if(sx1<(int)W) fill_rect(sx1,0,W-sx1,H,red);
+if(sy0>0) fill_rect(0,0,W,sy0,red);
+if(sy1<(int)H) fill_rect(0,sy1,W,H-sy1,red);
+float gx0=floorf((camx-hw/sc)/100.0f)*100.0f;
+float gy0=floorf((camy-hh/sc)/100.0f)*100.0f;
+for(float gx=gx0;gx<camx+hw/sc;gx+=100.0f){if(gx<0||gx>WORLD)continue; for(float gy=gy0;gy<camy+hh/sc;gy+=100.0f){if(gy<0||gy>WORLD)continue; fill_rect((int)((gx-camx)*sc+hw),(int)((gy-camy)*sc+hh),4,4,0x00203047);}}
+for(int k=0;k<NPEL;k++){if(!pel[k].active)continue; int px=(int)((pel[k].x-camx)*sc+hw),py=(int)((pel[k].y-camy)*sc+hh); circle(px,py,(int)((4+pel[k].size*2)*sc),pel[k].col);}
+for(int i=NSN-1;i>=0;i--){Snake *s=&sn[i]; if(!s->alive)continue; int r=(int)(radius_of(s)*sc); u32 dark=(s->col>>1)&0x007F7F7F; for(int j=s->len-1;j>=0;j-=2){int px=(int)((s->x[j]-camx)*sc+hw),py=(int)((s->y[j]-camy)*sc+hh); circle(px,py,r,(j%6<3)?s->col:dark);} int hx=(int)((s->x[0]-camx)*sc+hw),hy=(int)((s->y[0]-camy)*sc+hh); for(int e=-1;e<=1;e+=2){int ex=hx+(int)(cosf(s->ang+e*0.7f)*r*0.6f); int ey=hy+(int)(sinf(s->ang+e*0.7f)*r*0.6f); circle(ex,ey,r*35/100+1,0x00FFFFFF); circle(ex+(int)(cosf(s->ang)*r*0.15f),ey+(int)(sinf(s->ang)*r*0.15f),r*18/100+1,0x00000000);}}
+char buf[32]; int ui=(int)(4*sc+0.5f); if(ui<3)ui=3;
+draw_text("SCORE",24,20,ui,0x00FFFFFF);
+sprintf(buf,"%d",sn[0].score);
+draw_text(buf,24,20+7*ui,ui+2,0x00FFD23F);
+draw_text("X TURBO",24,(int)H-8*ui,ui,0x00809BBF);
+if(!sn[0].alive){int bw=text_width("GAME OVER",ui*2)+80,bh=16*ui+40; fill_rect((int)W/2-bw/2,(int)H/2-bh/2,bw,bh,0x00000000); draw_text("GAME OVER",(int)W/2-text_width("GAME OVER",ui*2)/2,(int)H/2-bh/2+24,ui*2,0x00FF4D4D); if(dead_t>60) draw_text("PRESS X",(int)W/2-text_width("PRESS X",ui)/2,(int)H/2+ui*3,ui,0x00FFFFFF);}
 }
-void resetGame(){
-foodCount=0;
-spawnFood(MAX_FOOD);
-initSnake(0,1,0,0,0,"Player");
-const char*bots[6]={"Viper","Kobra","Mamba","Rex","Ghost","Zeus"};
-for(int i=0;i<6;i++){
-float a=frand(0,6.28f);
-float r=frand(300,WORLD_R-400);
-initSnake(i+1,0,i%5,cosf(a)*r,sinf(a)*r,bots[i]);
-}
-camX=0;
-camY=0;
-gameOver=0;
-}
-void killSnake(int idx){
-Snake*s=&snakes[idx];
-if(!s->alive)return;
-s->alive=0;
-for(int i=0;i<s->len;i+=4){
-if(foodCount<MAX_FOOD){
-foods[foodCount].x=s->segs[i].x+frand(-8,8);
-foods[foodCount].y=s->segs[i].y+frand(-8,8);
-foods[foodCount].color=s->colorIdx;
-foodCount++;
-}
-}
-if(s->isPlayer)gameOver=1;
-}
-void updateGame(float dt,float moveAngle,int boost){
-for(int si=0;si<MAX_SNAKES;si++){
-Snake*s=&snakes[si];
-if(!s->alive)continue;
-if(s->isPlayer){
-float diff=fmodf(moveAngle-s->angle+9.42f,6.28f)-3.14f;
-s->angle+=diff*fminf(1,dt*7);
-}else{
-s->aiTimer-=dt;
-if(s->aiTimer<=0){
-s->aiTimer=0.35f;
-Vec2 h=s->segs[0];
-float bestD=1e9;
-Food*best=NULL;
-for(int i=0;i<foodCount;i+=3){
-float dx=foods[i].x-h.x;
-float dy=foods[i].y-h.y;
-float dd=dx*dx+dy*dy;
-if(dd<62500&&dd<bestD){bestD=dd;best=&foods[i];}
-}
-if(best)s->tang=atan2f(best->y-h.y,best->x-h.x);
-else s->tang+=frand(-1,1);
-float dc=sqrtf(h.x*h.x+h.y*h.y);
-if(dc>WORLD_R-250)s->tang=atan2f(-h.y,-h.x);
-}
-float diff=fmodf(s->tang-s->angle+9.42f,6.28f)-3.14f;
-s->angle+=diff*fminf(1,dt*4);
-}
-int isBoost=(s->isPlayer?boost:0);
-float spd=(isBoost&&s->len>12)?4.1f:2.15f;
-Vec2 h=s->segs[0];
-Vec2 nh={h.x+cosf(s->angle)*spd*60*dt,h.y+sinf(s->angle)*spd*60*dt};
-for(int i=s->len-1;i>0;i--)s->segs[i]=s->segs[i-1];
-s->segs[0]=nh;
-for(int i=1;i<s->len;i++){
-Vec2 p=s->segs[i-1];
-Vec2 c=s->segs[i];
-float dx=c.x-p.x;
-float dy=c.y-p.y;
-float d=sqrtf(dx*dx+dy*dy);
-if(d>9&&d>0.001f){s->segs[i].x=p.x+dx/d*9;s->segs[i].y=p.y+dy/d*9;}
-}
-for(int i=foodCount-1;i>=0;i--){
-float dx=h.x-foods[i].x;
-float dy=h.y-foods[i].y;
-if(dx*dx+dy*dy<324){
-foods[i]=foods[foodCount-1];
-foodCount--;
-s->score+=1;
-s->len+=1;
-if(s->len>MAX_SEG)s->len=MAX_SEG;
-s->rad=fminf(15,9+s->len*0.08f);
-}
-}
-if(nh.x*nh.x+nh.y*nh.y>(WORLD_R-10)*(WORLD_R-10)){killSnake(si);continue;}
-for(int o=0;o<MAX_SNAKES;o++){
-if(!snakes[o].alive)continue;
-int st=(o==si)?8:0;
-for(int i=st;i<snakes[o].len;i+=3){
-float dx=nh.x-snakes[o].segs[i].x;
-float dy=nh.y-snakes[o].segs[i].y;
-if(dx*dx+dy*dy<90){killSnake(si);break;}
-}
-if(!s->alive)break;
-}
-}
-if(snakes[0].alive){
-camX+=(snakes[0].segs[0].x-camX)*fminf(1,dt*5);
-camY+=(snakes[0].segs[0].y-camY)*fminf(1,dt*5);
-}
-if(foodCount<120)spawnFood(25);
-}
-void drawCircle(float x,float y,float r,u32 col){
-tiny3d_SetPolygon(TINY3D_TRIANGLE_FAN);
-tiny3d_VertexPos(x,y,0);
-tiny3d_VertexColor(col);
-for(int i=0;i<=16;i++){
-float a=i/16.0f*6.283f;
-tiny3d_VertexPos(x+cosf(a)*r,y+sinf(a)*r,0);
-tiny3d_VertexColor(col);
-}
-tiny3d_End();
-}
-int main(){
-tiny3d_Init(1024*1024);
+int main(int argc,char **argv){
+(void)argc;(void)argv;
+init_screen();
 ioPadInit(7);
-srand(time(NULL));
-resetGame();
-padData pad;
-float moveAngle=0;
-struct timeval last,now;
-gettimeofday(&last,NULL);
-while(1){
-gettimeofday(&now,NULL);
-float dt=(now.tv_sec-last.tv_sec)+(now.tv_usec-last.tv_usec)/1000000.0f;
-last=now;
-if(dt>0.033f)dt=0.016f;
-if(dt<0.001f)dt=0.016f;
-ioPadGetData(0,&pad);
-int boost=0;
-if(pad.len>0){
-int ax=pad.ANA_L_H-128;
-int ay=pad.ANA_L_V-128;
-if(ax*ax+ay*ay>400)moveAngle=atan2f((float)ay,(float)ax);
-if(pad.BTN_CROSS||pad.BTN_R2)boost=1;
-if(pad.BTN_START&&gameOver)resetGame();
-}
-if(!gameOver)updateGame(dt,moveAngle,boost);
-tiny3d_Clear(0xFF12121E,TINY3D_CLEAR_ALL);
-tiny3d_Project2D();
-float camL=camX-W/2;
-float camT=camY-H/2;
-tiny3d_SetPolygon(TINY3D_LINE_LOOP);
-for(int i=0;i<64;i++){
-float a=i/64.0f*6.283f;
-tiny3d_VertexPos(cosf(a)*WORLD_R-camL,sinf(a)*WORLD_R-camT,0);
-tiny3d_VertexColor(0xFFFF1744);
-}
-tiny3d_End();
-for(int i=0;i<foodCount;i++){
-drawCircle(foods[i].x-camL,foods[i].y-camT,4,foodColors[foods[i].color]);
-}
-for(int si=0;si<MAX_SNAKES;si++){
-Snake*s=&snakes[si];
-if(!s->alive)continue;
-for(int i=s->len-1;i>=0;i--){
-float rad=s->rad*(1-(float)i/s->len*0.4f);
-u32 c=colors[s->colorIdx][(i>>2)&1];
-drawCircle(s->segs[i].x-camL,s->segs[i].y-camT,rad,c);
-}
-Vec2 h=s->segs[0];
-float ex=cosf(s->angle);
-float ey=sinf(s->angle);
-float px=-ey;
-float py=ex;
-for(int sd=-1;sd<=1;sd+=2){
-drawCircle(h.x+ex*5+px*sd*6-camL,h.y+ey*5+py*sd*6-camT,s->rad*0.38f,0xFFFFFFFF);
-drawCircle(h.x+ex*7+px*sd*6-camL,h.y+ey*7+py*sd*6-camT,s->rad*0.2f,0xFF000000);
-}
-}
-tiny3d_Flip();
-}
+sysUtilRegisterCallback(0,sysutil_cb,NULL);
+srand(20261109);
+init_game();
+while(running){sysUtilCheckCallback(); read_pad(); update_game(); render(); present();}
 return 0;
 }
