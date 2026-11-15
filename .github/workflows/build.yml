@@ -1,0 +1,30 @@
+name: Build PS3 PKG
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: ps3dev/psl1ght:latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Build EBOOT
+        run: |
+          make clean
+          make
+      - name: Make PKG
+        run: |
+          mkdir -p pkg/USRDIR
+          cp slither.self pkg/USRDIR/EBOOT.BIN
+          cp ICON0.PNG pkg/ICON0.PNG || echo "sem icone"
+          python3 make_sfo.py
+          cp PARAM.SFO pkg/PARAM.SFO
+          pkg --contentid UP0001-SLITHERIO_00-0000000000000000 pkg/ SLITHERIO.pkg
+      - name: Upload PKG
+        uses: actions/upload-artifact@v4
+        with:
+          name: SLITHERIO.pkg
+          path: SLITHERIO.pkg
