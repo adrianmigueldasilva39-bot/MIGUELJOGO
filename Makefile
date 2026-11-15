@@ -1,4 +1,4 @@
-# Makefile - Cobra Neon PS3 (PSL1GHT)
+# Makefile
 TARGET		:=	cobra
 BUILD		:=	build
 SOURCES		:=	.
@@ -13,30 +13,28 @@ TITLE		:=	Cobra Neon
 APPID		:=	COBRANEON01
 CONTENTID	:=	UP0001-COBRANEON01_00-0000000000000000
 
-CFLAGS		:=	-O2 -Wall -mcpu=cell -mhard-float -fmodulo-sched \
-			-ffunction-sections -fdata-sections
+CFLAGS		:=	-O2 -Wall -mcpu=cell -mhard-float -fmodulo-sched -ffunction-sections -fdata-sections
 CXXFLAGS	:=	$(CFLAGS) -fno-exceptions -fno-rtti
 ASFLAGS		:=	$(CFLAGS)
 LDFLAGS		:=	-Wl,--gc-sections
-
 LIBS		:=	-lrsx -lgcm_sys -lsysutil -lio -lm
 
-INCLUDE		:=	-I$(PSL1GHT)/ppu/include -I$(PS3DEV)/portlibs/ppu/include \
-			-I$(CURDIR)/$(INCLUDES)
-
+INCLUDE		:=	-I$(PSL1GHT)/ppu/include -I$(PS3DEV)/portlibs/ppu/include -I$(CURDIR)/$(INCLUDES)
 LIBDIRS		:=	-L$(PSL1GHT)/ppu/lib -L$(PS3DEV)/portlibs/ppu/lib
 
 include $(PSL1GHT)/ppu_rules
 
-# Gera PKG a partir do ELF
-pkg: $(TARGET).elf
+PARAM.SFO: sfo.xml
+	@python3 $(PSL1GHT)/bin/sfo.py sfo.xml PARAM.SFO
+
+pkg: $(TARGET).elf PARAM.SFO
 	@$(PSL1GHT)/bin/make_self_npdrm $(TARGET).elf $(TARGET).self $(CONTENTID)
 	@mkdir -p pkg/USRDIR
 	@cp $(TARGET).self pkg/USRDIR/EBOOT.BIN
-	@$(PSL1GHT)/bin/make_package_npdrm pkg/CONFIG $(CONTENTID) $(TARGET).pkg || \
-	 $(PSL1GHT)/bin/pkg.py --contentid $(CONTENTID) pkg/ $(TARGET).pkg || \
-	 echo "PKG nao gerado, mas ELF esta pronto"
-	@echo "PKG: $(TARGET).pkg"
+	@cp PARAM.SFO pkg/PARAM.SFO
+	@cp -r $(DATA)/* pkg/USRDIR/ 2>/dev/null || true
+	@$(PSL1GHT)/bin/make_package_npdrm pkg/CONFIG $(CONTENTID) $(TARGET).pkg 2>/dev/null || $(PSL1GHT)/bin/pkg.py --contentid $(CONTENTID) pkg/ $(TARGET).pkg 2>/dev/null || echo "PKG skip"
+	@echo "OK: $(TARGET).pkg"
 
 clean::
-	@rm -rf $(TARGET).pkg $(TARGET).elf $(TARGET).self pkg $(BUILD) 2>/dev/null || true
+	@rm -rf $(TARGET).pkg $(TARGET).elf $(TARGET).self PARAM.SFO pkg $(BUILD) 2>/dev/null || true
