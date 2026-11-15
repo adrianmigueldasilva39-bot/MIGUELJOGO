@@ -14,14 +14,13 @@ jobs:
       - name: Baixar codigo do repositorio
         uses: actions/checkout@v4
 
-      - name: Compilar ELF, SELF e PKG
+      - name: Compilar PKG
         run: |
           export PS3DEV=/usr/local/ps3dev
           export PSL1GHT=$PS3DEV
           export PATH=$PATH:$PS3DEV/bin:$PS3DEV/ppu/bin:$PS3DEV/spu/bin
           make clean
           make
-          make pkg
           ls -lh
 
       - name: Enviar artefatos (PKG e ELF)
@@ -30,6 +29,5 @@ jobs:
           name: cobra-ps3
           path: |
             cobra.pkg
-            cobra.self
             cobra.elf
           if-no-files-found: error
