@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<sfo>
+  <param name="TITLE" type="utf8">Cobra Neon</param>
+  <param name="APP_VER" type="utf8">01.00</param>
+  <param name="CATEGORY" type="utf8">HG</param>
+  <param name="TITLE_ID" type="utf8">COBR00001</param>
+  <param name="PARENTAL_LEVEL" type="int">0</param>
+  <param name="ATTRIBUTE" type="int">0</param>
+  <param name="RESOLUTION" type="int">0</param>
+  <param name="SOUND_FORMAT" type="int">0</param>
+</sfo>
