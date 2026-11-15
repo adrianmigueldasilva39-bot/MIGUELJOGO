@@ -15,7 +15,7 @@ CONTENTID	:=	UP0001-COBRANEON01_00-0000000000000000
 CFLAGS		:=	-O2 -Wall -mcpu=cell -mhard-float -ffunction-sections -fdata-sections
 CXXFLAGS	:=	$(CFLAGS) -fno-exceptions -fno-rtti
 ASFLAGS		:=	$(CFLAGS)
-LDFLAGS		:=	-Wl,--gc-sections
+LDFLAGS		:=	--gc-sections
 
 LIBS		:=	-lrsx -lgcm_sys -lsysutil -lio -lm
 
