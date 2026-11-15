@@ -18,11 +18,12 @@
 #define NTR 120
 
 typedef struct {
-    float x[MAXSEG], y[MAXSEG];
+    float x[MAXSEG];
+    float y[MAXSEG];
     int len, alive, respawn, score, kills;
     float ang, tgt;
     u32 col, glow, col2;
-    char name;
+    char name[12];
 } Snake;
 
 typedef struct {
@@ -39,8 +40,8 @@ typedef struct {
 
 static gcmContextData *ctx;
 static u32 W, H;
-static u32 *fb;
-static u32 fboff;
+static u32 *fb[2];
+static u32 fboff[2];
 static u32 *back;
 static int cur = 0, first = 1;
 static volatile int running = 1;
@@ -54,10 +55,10 @@ static float camx = 1800, camy = 1800, zoom = 1.0f, ax = 0, ay = 0, mag = 0;
 static int bx = 0, px = 0, ptri = 0;
 static int xp = 0, tprev = 0;
 
-static u32 pal = {0x00FF2E63, 0x0000F0FF, 0x0000FF88, 0x00FFE600, 0x00B967FF, 0x00FF6BCB, 0x0000FFAA, 0x00FF7A00};
-static u32 pal2 = {0x00FF6BCB, 0x0000FF88, 0x00FFE600, 0x00FF2E63, 0x0000F0FF, 0x00B967FF, 0x00FF2E63, 0x0000FF88};
-static u32 glowpal = {0x00350015, 0x00002535, 0x00003518, 0x00352800, 0x00220035, 0x00351828, 0x00003522, 0x00351A00};
-static const char *bnames = {"BOB", "ZE", "LIA", "TURBO", "RAFA", "NINA", "KAKA"};
+static u32 pal[8] = {0x00FF2E63, 0x0000F0FF, 0x0000FF88, 0x00FFE600, 0x00B967FF, 0x00FF6BCB, 0x0000FFAA, 0x00FF7A00};
+static u32 pal2[8] = {0x00FF6BCB, 0x0000FF88, 0x00FFE600, 0x00FF2E63, 0x0000F0FF, 0x00B967FF, 0x00FF2E63, 0x0000FF88};
+static u32 glowpal[8] = {0x00350015, 0x00002535, 0x00003518, 0x00352800, 0x00220035, 0x00351828, 0x00003522, 0x00351A00};
+static const char *bnames[7] = {"BOB", "ZE", "LIA", "TURBO", "RAFA", "NINA", "KAKA"};
 
 static void cb(u64 s, u64 p, void *u) {
     (void)p; (void)u;
@@ -201,7 +202,8 @@ static const G gl[] = {
 };
 
 static const char *findg(char c) {
-    for (unsigned i = 0; i < sizeof(gl) / sizeof(gl); i++)
+    unsigned total = sizeof(gl) / sizeof(gl[0]);
+    for (unsigned i = 0; i < total; i++)
         if (gl[i].c == c) return gl[i].p;
     return 0;
 }
@@ -251,7 +253,7 @@ static void spawn(int i) {
         s->y[j] = y - sinf(s->ang) * 7 * j;
     }
     if (i == 0) {
-        s->col = pal; s->glow = glowpal; s->col2 = pal2;
+        s->col = pal[1]; s->glow = glowpal[1]; s->col2 = pal2[1];
         strcpy(s->name, "VOCE");
     } else {
         s->score = rand() % 600;
@@ -265,7 +267,7 @@ static void spawn(int i) {
 static void kill_snake(int i, int killer) {
     Snake *s = &sn[i];
     if (i == 0) dead = 0;
-    else if (killer == 0) { sn.kills++; sn.score += 150; }
+    else if (killer == 0) { sn[0].kills++; sn[0].score += 150; }
     for (int j = 0; j < s->len; j += 2) {
         drop_pellet(s->x[j] + (frand() - 0.5f) * 16.0f,
                     s->y[j] + (frand() - 0.5f) * 16.0f,
@@ -300,7 +302,7 @@ static void readpad(void) {
     ax = ay = mag = 0;
     bx = px = ptri = 0;
     ioPadGetInfo(&info);
-    if (info.status) {
+    if (info.status[0]) {
         ioPadGetData(0, &d);
         float a = ((int)d.ANA_L_H - 128) / 128.0f;
         float b = ((int)d.ANA_L_V - 128) / 128.0f;
@@ -335,13 +337,13 @@ static void update(void) {
                 int bi = -1;
                 for (int k = 0; k < NPEL; k += 2) {
                     if (!pel[k].on) continue;
-                    float dx = pel[k].x - s->x, dy = pel[k].y - s->y, d = dx * dx + dy * dy;
+                    float dx = pel[k].x - s->x[0], dy = pel[k].y - s->y[0], d = dx * dx + dy * dy;
                     if (d < best) { best = d; bi = k; }
                 }
-                if (bi >= 0) s->tgt = atan2f(pel[bi].y - s->y, pel[bi].x - s->x);
+                if (bi >= 0) s->tgt = atan2f(pel[bi].y - s->y[0], pel[bi].x - s->x[0]);
             }
-            if (s->x < 300 || s->x > WORLD - 300 || s->y < 300 || s->y > WORLD - 300)
-                s->tgt = atan2f(WORLD / 2 - s->y, WORLD / 2 - s->x);
+            if (s->x[0] < 300 || s->x[0] > WORLD - 300 || s->y[0] < 300 || s->y[0] > WORLD - 300)
+                s->tgt = atan2f(WORLD / 2 - s->y[0], WORLD / 2 - s->x[0]);
         }
 
         float d = s->tgt - s->ang;
@@ -361,12 +363,12 @@ static void update(void) {
             drop_pellet(s->x[s->len], s->y[s->len], s->col, s->glow, 1);
         }
 
-        s->x += cosf(s->ang) * sp;
-        s->y += sinf(s->ang) * sp;
+        s->x[0] += cosf(s->ang) * sp;
+        s->y[0] += sinf(s->ang) * sp;
 
         if (turbo) {
-            tr[tri].x = s->x - cosf(s->ang) * 18;
-            tr[tri].y = s->y - sinf(s->ang) * 18;
+            tr[tri].x = s->x[0] - cosf(s->ang) * 18;
+            tr[tri].y = s->y[0] - sinf(s->ang) * 18;
             tr[tri].life = 16;
             tr[tri].col = s->glow;
             tri = (tri + 1) % NTR;
@@ -382,7 +384,7 @@ static void update(void) {
             }
         }
 
-        if (s->x < 0 || s->x > WORLD || s->y < 0 || s->y > WORLD) {
+        if (s->x[0] < 0 || s->x[0] > WORLD || s->y[0] < 0 || s->y[0] > WORLD) {
             kill_snake(i, -1);
             continue;
         }
@@ -390,7 +392,7 @@ static void update(void) {
         float rs = rad(s), er = rs + 15.0f;
         for (int k = 0; k < NPEL; k++) {
             if (!pel[k].on) continue;
-            float dx = pel[k].x - s->x, dy = pel[k].y - s->y;
+            float dx = pel[k].x - s->x[0], dy = pel[k].y - s->y[0];
             if (dx * dx + dy * dy < er * er) {
                 pel[k].on = 0;
                 s->score += 10 * pel[k].val;
@@ -416,7 +418,7 @@ static void update(void) {
             float lim = (rs + rad(&sn[o])) * 0.72f;
             lim *= lim;
             for (int j = 0; j < sn[o].len; j += 2) {
-                float dx = sn[o].x[j] - s->x, dy = sn[o].y[j] - s->y;
+                float dx = sn[o].x[j] - s->x[0], dy = sn[o].y[j] - s->y[0];
                 if (dx * dx + dy * dy < lim) {
                     kill_snake(i, o);
                     break;
@@ -426,10 +428,10 @@ static void update(void) {
         }
     }
 
-    if (sn.alive) {
-        camx = sn.x;
-        camy = sn.y;
-        float target_zoom = 1.05f - (sn.len - 14) * 0.0014f;
+    if (sn[0].alive) {
+        camx = sn[0].x[0];
+        camy = sn[0].y[0];
+        float target_zoom = 1.05f - (sn[0].len - 14) * 0.0014f;
         if (target_zoom < 0.65f) target_zoom = 0.65f;
         zoom += (target_zoom - zoom) * 0.05f;
     } else {
@@ -497,7 +499,7 @@ static void render(void) {
             circ(px2, py, r, c);
             if (quality == 1) circ(px2 - r / 5, py - r / 5, (r * 2) / 3, add_col(c, 0x00222222));
         }
-        int hx = (int)((s->x - camx) * sc + hw), hy = (int)((s->y - camy) * sc + hh);
+        int hx = (int)((s->x[0] - camx) * sc + hw), hy = (int)((s->y[0] - camy) * sc + hh);
         float pxn = -sinf(s->ang), pyn = cosf(s->ang);
         int eoff = (int)(r * 0.55f);
         for (int e = -1; e <= 1; e += 2) {
@@ -508,12 +510,12 @@ static void render(void) {
         }
     }
 
-    char buf;
+    char buf[64];
     rect(12, 12, 220, 44, 0x000A0A1E);
     rect(12, 12, 220, 2, 0x0000F0FF);
-    sprintf(buf, "SCORE %d", sn.score);
+    sprintf(buf, "SCORE %d", sn[0].score);
     txt(buf, 22, 20, 3, 0x00FFE600);
-    sprintf(buf, "LEN %d", sn.len);
+    sprintf(buf, "LEN %d", sn[0].len);
     txt(buf, 22, 38, 2, 0x00FFFFFF);
 
     int ord[NSN];
@@ -544,7 +546,7 @@ static void render(void) {
     }
     for (int i = 0; i < NSN; i++) {
         if (!sn[i].alive) continue;
-        int dx = (int)(sn[i].x / WORLD * 2 * mr - mr), dy = (int)(sn[i].y / WORLD * 2 * mr - mr);
+        int dx = (int)(sn[i].x[0] / WORLD * 2 * mr - mr), dy = (int)(sn[i].y[0] / WORLD * 2 * mr - mr);
         int rr = (i == 0) ? 4 : 3;
         u32 cc = (i == 0) ? 0x0000FF88 : sn[i].col;
         circ(mx + dx, my + dy, rr, cc);
