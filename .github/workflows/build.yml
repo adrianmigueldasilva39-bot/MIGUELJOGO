@@ -14,8 +14,12 @@ jobs:
       - name: Baixar codigo do repositorio
         uses: actions/checkout@v4
 
-      - name: Procurar sfo.py na imagem
-        run: find / -name "sfo.py" 2>/dev/null || true
+      - name: Procurar ferramentas
+        run: |
+          echo "--- conteudo de bin ---"
+          ls /usr/local/ps3dev/bin || true
+          echo "--- procura por sfo/pkg/self/sprx ---"
+          find / \( -name "sfo.py" -o -name "pkg.py" -o -name "make_self_npdrm" -o -name "sprxlinker" \) 2>/dev/null || true
 
       - name: Compilar PKG
         run: |
